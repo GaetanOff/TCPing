@@ -45,6 +45,8 @@ node main.js <ip> <port> [protocol]
 - **FiveM:** FiveM handshake & info.
 - **MCv1:** MC legacy ping (0xFE).
 - **MCv2:** MC handshake & status.
+- **SSH:** SSH handshake.
+- **HTTP**: HTTP/HTTPS banner query.
 
 ---
 
@@ -66,7 +68,9 @@ TCPing/
 │       ├── basic.js          # Basic TCP connection protocol.
 │       ├── fivem.js          # FiveM handshake & info.
 │       ├── mcv1.js           # MC legacy ping (0xFE).
-│       └── mcv2.js           # MC handshake & status.
+│       ├── mcv2.js           # MC handshake & status.
+│       ├── ssh.js            # SSH handshake.
+│       └── http.js           # HTTP/HTTPS banner query.
 │── utils/
 │   ├── minecraft.js          # Utils minecraft functions.
 │   ├── validators.js         # IP and port validation functions.
