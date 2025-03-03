@@ -21,3 +21,29 @@ ${chalk.yellow.bold("Control:")}
   Press CTRL+C to stop the process.
     `));
 }
+
+/**
+ * Prints TCPing statistics.
+ *
+ * @param {number} totalAttempts
+ * @param {number} successfulAttempts
+ * @param {number} failedAttempts
+ * @param {number} totalSocketLatency
+ * @param {number} totalHandshakeLatency
+ */
+export function sendStatisticsMessage(protocolModule, totalAttempts, successfulAttempts, failedAttempts, totalSocketLatency, totalHandshakeLatency, minSocketLatency, maxSocketLatency) {
+    console.log(chalk.blue("\n=== TCPing Statistics ==="));
+    console.log(`Total Attempts: ${totalAttempts}`);
+    console.log(`Successful Attempts: ${successfulAttempts}`);
+    console.log(`Failed Attempts: ${failedAttempts}`);
+    console.log(`Success Rate: ${((successfulAttempts / totalAttempts) * 100).toFixed(2)}%`);
+    if (successfulAttempts > 0) {
+        console.log(`Average Socket Latency: ${(totalSocketLatency / successfulAttempts).toFixed(2)}ms`);
+        if (protocolModule.name.toLowerCase() !== "basic") {
+            console.log(`Average Handshake Latency: ${(totalHandshakeLatency / successfulAttempts).toFixed(2)}ms`);
+        }
+        console.log(`Min Socket Latency: ${minSocketLatency}ms`);
+        console.log(`Max Socket Latency: ${maxSocketLatency}ms`);
+    }
+    process.exit(0);
+}

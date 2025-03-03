@@ -1,8 +1,8 @@
 import net from "net";
 import chalk from "chalk";
-import {getProtocolModule} from "./protocol/protocols.js";
-import {validateIp, validatePort} from "./utils/validators.js";
-import {sendHelpMessage} from "./utils/messages.js";
+import { getProtocolModule } from "./protocol/protocols.js";
+import { validateIp, validatePort } from "./utils/validators.js";
+import { sendHelpMessage, sendStatisticsMessage } from "./utils/messages.js";
 
 const args = process.argv.slice(2);
 if (args.length < 2) {
@@ -24,37 +24,60 @@ if (!validatePort(port)) {
 
 const protocolModule = getProtocolModule(protocolInput, chalk);
 
+// Statistics variables
+let totalAttempts = 0;
+let successfulAttempts = 0;
+let failedAttempts = 0;
+let totalSocketLatency = 0; // Sum of socket connection times
+let totalHandshakeLatency = 0; // Sum of handshake times (for non-basic protocols)
+let minSocketLatency = Infinity;
+let maxSocketLatency = 0;
+
+// Capture CTRL+C to print statistics before exiting
+process.on("SIGINT", () => {
+    sendStatisticsMessage(protocolModule, totalAttempts, successfulAttempts, failedAttempts, totalSocketLatency, totalHandshakeLatency, maxSocketLatency, maxSocketLatency);
+});
+
 function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
     console.log(chalk.yellow(`🚀 Starting TCPing on ${target}:${port} with ${protocolModule.name} protocol...`));
-    let attempt = 1;
 
     const runAttempt = () => {
-        const startTime = Date.now(); // start of the attempt
+        totalAttempts++;
+        const startTime = Date.now(); // Start of the attempt
         const socket = net.connect({ host: target, port: parseInt(port, 10) });
         let finished = false;
-        let connectTime; // will store the time when 'connect' event occurs
+        let connectTime; // Time when 'connect' event occurs
 
         // finish() is called once per attempt.
-        // It prints the connection time (from start to connect) and, for non-basic protocols,
-        // the handshake time (from connect to handshake completion).
+        // It prints the connection time (Socket) and, for non-basic protocols,
+        // the handshake time (PC) as well.
         const finish = (result) => {
             if (finished) return;
             finished = true;
-            const totalDuration = Date.now() - startTime; // total time of attempt
-            const socketDuration = connectTime - startTime; // time until socket connect
+            const totalDuration = Date.now() - startTime; // Total time of attempt
+            const socketLatency = connectTime - startTime; // Time until socket connect
             if (result.success) {
-                let extra = (result.extra !== undefined) ? ` (PC: ${result.extra}ms)` : "";
-                console.log(chalk.green(`[${attempt}] Connected to ${target}:${port} in ${socketDuration}ms with ${protocolModule.name} protocol.${extra}`));
+                successfulAttempts++;
+                totalSocketLatency += socketLatency;
+                // Update min/max socket latency
+                if (socketLatency < minSocketLatency) minSocketLatency = socketLatency;
+                if (socketLatency > maxSocketLatency) maxSocketLatency = socketLatency;
+                let extra = "";
+                if (result.extra !== undefined) {
+                    extra = ` (PC: ${result.extra}ms)`;
+                    totalHandshakeLatency += result.extra;
+                }
+                console.log(chalk.green(`[${totalAttempts}] Connected to ${target}:${port} in ${socketLatency}ms with ${protocolModule.name} protocol.${extra}`));
             } else {
-                console.log(chalk.red(`[${attempt}] Error connecting to ${target}:${port} after ${totalDuration}ms: ${result.message}`));
+                failedAttempts++;
+                console.log(chalk.red(`[${totalAttempts}] Error connecting to ${target}:${port} after ${totalDuration}ms: ${result.message}`));
             }
-            attempt++;
             setTimeout(runAttempt, delay);
         };
 
         socket.on('connect', () => {
             connectTime = Date.now();
-            // For the basic protocol, the connection itself is enough.
+            // For the basic protocol, the connection itself is sufficient.
             if (protocolModule.name.toLowerCase() === "basic") {
                 finish({ success: true });
             } else {
