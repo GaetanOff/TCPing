@@ -44,9 +44,9 @@ function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
             const socketDuration = connectTime - startTime; // time until socket connect
             if (result.success) {
                 let extra = (result.extra !== undefined) ? ` (PC: ${result.extra}ms)` : "";
-                console.log(chalk.green(`✅ [${attempt}] Connected to ${target}:${port} in ${socketDuration}ms with ${protocolModule.name} protocol.${extra}`));
+                console.log(chalk.green(`[${attempt}] Connected to ${target}:${port} in ${socketDuration}ms with ${protocolModule.name} protocol.${extra}`));
             } else {
-                console.log(chalk.red(`❌ [${attempt}] Error connecting to ${target}:${port} after ${totalDuration}ms: ${result.message}`));
+                console.log(chalk.red(`[${attempt}] Error connecting to ${target}:${port} after ${totalDuration}ms: ${result.message}`));
             }
             attempt++;
             setTimeout(runAttempt, delay);
