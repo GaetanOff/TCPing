@@ -3,6 +3,7 @@ import chalk from "chalk";
 import { getProtocolModule } from "./protocol/protocols.js";
 import { validateIp, validatePort } from "./utils/validators.js";
 import { sendHelpMessage, sendStatisticsMessage } from "./utils/messages.js";
+import * as dns from "dns";
 
 const args = process.argv.slice(2);
 if (args.length < 2) {
@@ -23,6 +24,19 @@ if (!validatePort(port)) {
 }
 
 const protocolModule = getProtocolModule(protocolInput, chalk);
+
+if (args.includes("-r") || args.includes("--resolve")) {
+    // If the target is a domain (not an IP), resolve it first
+    if (net.isIP(target) === 0) {
+        dns.lookup(target, (err, address) => {
+            if (err) {
+                console.log(chalk.red(`Error resolving domain "${target}": ${err.message}`));
+                process.exit(1);
+            }
+            console.log(chalk.gray(`Resolved domain "${target}" to IP: ${address}`));
+        });
+    }
+}
 
 // Statistics variables
 let totalAttempts = 0;

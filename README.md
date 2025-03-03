@@ -33,12 +33,13 @@ npm install
 
 The tool accepts command-line arguments in the following format:
 ```sh
-node main.js <ip> <port> [protocol]
+node main.js <ip> <port> [protocol] [-r]
 ```
 
 - **ip:** The target server's IP address.
 - **port:** The target server's port (1–65535).
 - **protocol (optional):** The protocol to simulate. If not provided, "basic" is used by default.
+- **-r (optional):** Resolves the target IP if it's a domain.
 
 ### **Available Protocols**
 - **basic:** Basic TCP connection.
