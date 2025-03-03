@@ -1,0 +1,15 @@
+{
+  "name": "tcping",
+  "version": "1.0.0",
+  "description": "A lightweight TCP connection testing tool.",
+  "main": "app/main.js",
+  "type": "module",
+  "author": "GaetanDev.fr",
+  "license": "GPL-3.0",
+  "scripts": {
+    "start": "node app/main.js"
+  },
+  "dependencies": {
+    "chalk": "^5.4.1"
+  }
+}
