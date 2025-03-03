@@ -3,40 +3,35 @@ import chalk from "chalk";
 import { getProtocolModule } from "./protocol/protocols.js";
 import { validateIp, validatePort } from "./utils/validators.js";
 import { sendHelpMessage, sendStatisticsMessage } from "./utils/messages.js";
-import * as dns from "dns";
+import dns from "dns";
 
-const args = process.argv.slice(2);
-if (args.length < 2) {
+let rawArgs = process.argv.slice(2);
+
+// Separate flags (starting with "-" or "--") from non-flag parameters
+const flags = rawArgs.filter(arg => arg.startsWith("-"));
+const params = rawArgs.filter(arg => !arg.startsWith("-"));
+
+if (params.length < 2) {
     sendHelpMessage();
     process.exit(1);
 }
 
-const [target, port, protocolInput] = args;
+let [target, port, protocolInput] = params;
 
-if (!validateIp(target)) {
-    console.log(chalk.red(`Invalid IP address: "${target}"`));
-    process.exit(1);
-}
+// Determine if the resolve flag is present. Accept any flag containing "r" or "resolve" (case-insensitive).
+const resolveFlag = flags.some(flag => flag.toLowerCase() === "-r" || flag.toLowerCase() === "--resolve");
 
 if (!validatePort(port)) {
     console.log(chalk.red(`Invalid port: "${port}". Please enter a port number between 1 and 65535.`));
     process.exit(1);
 }
 
-const protocolModule = getProtocolModule(protocolInput, chalk);
-
-if (args.includes("-r") || args.includes("--resolve")) {
-    // If the target is a domain (not an IP), resolve it first
-    if (net.isIP(target) === 0) {
-        dns.lookup(target, (err, address) => {
-            if (err) {
-                console.log(chalk.red(`Error resolving domain "${target}": ${err.message}`));
-                process.exit(1);
-            }
-            console.log(chalk.gray(`Resolved domain "${target}" to IP: ${address}`));
-        });
-    }
+if (!validateIp(target)) {
+    console.log(chalk.red(`Invalid IP address or domain: "${target}"`));
+    process.exit(1);
 }
+
+const protocolModule = getProtocolModule(protocolInput, chalk);
 
 // Statistics variables
 let totalAttempts = 0;
@@ -49,9 +44,19 @@ let maxSocketLatency = 0;
 
 // Capture CTRL+C to print statistics before exiting
 process.on("SIGINT", () => {
-    sendStatisticsMessage(protocolModule, totalAttempts, successfulAttempts, failedAttempts, totalSocketLatency, totalHandshakeLatency, maxSocketLatency, maxSocketLatency);
+    sendStatisticsMessage(totalAttempts, successfulAttempts, failedAttempts, totalSocketLatency, totalHandshakeLatency, minSocketLatency, maxSocketLatency);
 });
 
+/**
+ * Continuously pings the target TCP port using the selected protocol.
+ * Measures the socket connection time and, for non-basic protocols, the handshake time.
+ * Schedules a new attempt after a fixed delay.
+ *
+ * @param {string} target - The target server IP address.
+ * @param {string|number} port - The target server port.
+ * @param {object} protocolModule - The protocol module to use for the handshake.
+ * @param {number} delay - Delay between attempts in milliseconds.
+ */
 function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
     console.log(chalk.yellow(`🚀 Starting TCPing on ${target}:${port} with ${protocolModule.name} protocol...`));
 
@@ -63,13 +68,13 @@ function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
         let connectTime; // Time when 'connect' event occurs
 
         // finish() is called once per attempt.
-        // It prints the connection time (Socket) and, for non-basic protocols,
-        // the handshake time (PC) as well.
+        // It prints the socket connection time (from start to connect) and, for non-basic protocols,
+        // the handshake time (from connect to handshake completion).
         const finish = (result) => {
             if (finished) return;
             finished = true;
             const totalDuration = Date.now() - startTime; // Total time of attempt
-            const socketLatency = connectTime - startTime; // Time until socket connect
+            const socketLatency = connectTime - startTime; // Time until socket connects
             if (result.success) {
                 successfulAttempts++;
                 totalSocketLatency += socketLatency;
@@ -116,4 +121,18 @@ function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
     runAttempt();
 }
 
-launchTcpingContinuous(target, port, protocolModule);
+// If the resolve flag is set and the target is not a numeric IP, resolve it before starting.
+function startPingWithResolvedTarget(targetInput) {
+    if (resolveFlag && net.isIP(targetInput) === 0) {
+        dns.lookup(targetInput, (err, address) => {
+            if (err) {
+                console.log(chalk.red(`Error resolving domain "${targetInput}": ${err.message}`));
+                process.exit(1);
+            }
+            console.log(chalk.gray(`Resolved domain "${targetInput}" to IP: ${address}`));
+        });
+    }
+    launchTcpingContinuous(targetInput, port, protocolModule);
+}
+
+startPingWithResolvedTarget(target);
