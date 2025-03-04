@@ -24,7 +24,7 @@ const protocols = {
  */
 export function getProtocolModule(protocolInput, chalk) {
     let protocolModule;
-    if (!protocolInput) {
+    if (!protocolInput || protocolInput.startsWith("-") || protocolInput.startsWith("--")) {
         protocolModule = protocols["basic"];
     } else {
         const inputNormalized = protocolInput.toLowerCase();
