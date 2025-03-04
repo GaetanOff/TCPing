@@ -7,6 +7,23 @@ import dns from "dns";
 
 let rawArgs = process.argv.slice(2);
 
+let timeoutValue = 5000;
+
+// Extract timeout flag (-t or --timeout) and its value
+for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === "-t" || rawArgs[i] === "--timeout") {
+        // If there is no next argument or next argument starts with "-", print error and exit.
+        if (i + 1 >= rawArgs.length || rawArgs[i + 1].startsWith("-")) {
+            console.log(chalk.red(`Error: Missing value for ${rawArgs[i]} flag.`));
+            process.exit(1);
+        }
+        timeoutValue = parseInt(rawArgs[i + 1], 10);
+        // Remove the flag and its value from rawArgs
+        rawArgs.splice(i, 2);
+        i--; // adjust index after splice
+    }
+}
+
 // Separate flags (starting with "-" or "--") from non-flag parameters
 const flags = rawArgs.filter(arg => arg.startsWith("-"));
 const params = rawArgs.filter(arg => !arg.startsWith("-"));
@@ -22,12 +39,13 @@ let [target, port, protocolInput] = params;
 const resolveFlag = flags.some(flag => flag.toLowerCase() === "-r" || flag.toLowerCase() === "--resolve");
 
 if (!validatePort(port)) {
-    console.log(chalk.red(`Invalid port: "${port}". Please enter a port number between 1 and 65535.`));
+    console.log(chalk.red(`Error: Port "${port}" is invalid.`));
+    console.log(chalk.red(`Please enter a port number between 1 and 65535.`));
     process.exit(1);
 }
 
 if (!validateIp(target)) {
-    console.log(chalk.red(`Invalid IP address or domain: "${target}"`));
+    console.log(chalk.red(`Error: IP address or domain "${target}" is invalid.`));
     process.exit(1);
 }
 
@@ -121,8 +139,8 @@ function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
             finish({ success: false, message: err.message });
         });
 
-        socket.setTimeout(5000, () => {
-            finish({ success: false, message: "timed out after 5000ms" });
+        socket.setTimeout(timeoutValue, () => {
+            finish({ success: false, message: `timed out after ${timeoutValue}ms` });
             socket.destroy();
         });
     };

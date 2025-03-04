@@ -17,6 +17,7 @@ ${chalk.yellow.bold("Description:")}
   This tool continuously attempts to establish a TCP connection to the specified IP or domain.
   It uses the selected protocol to mimic various client behaviors and measure the response time.
   If the --resolve or -r flag is provided, the domain will be resolved to its IP address before pinging.
+  If the --timeout or -t flag is provided, it will override the default timeout of 5000ms.
 
 ${chalk.yellow.bold("Control:")}
   Press CTRL+C to stop the process.
