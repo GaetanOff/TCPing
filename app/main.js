@@ -44,7 +44,7 @@ let maxSocketLatency = 0;
 
 // Capture CTRL+C to print statistics before exiting
 process.on("SIGINT", () => {
-    sendStatisticsMessage(totalAttempts, successfulAttempts, failedAttempts, totalSocketLatency, totalHandshakeLatency, minSocketLatency, maxSocketLatency);
+    sendStatisticsMessage(protocolModule, totalAttempts, successfulAttempts, failedAttempts, totalSocketLatency, totalHandshakeLatency, minSocketLatency, maxSocketLatency);
 });
 
 /**
@@ -58,7 +58,12 @@ process.on("SIGINT", () => {
  * @param {number} delay - Delay between attempts in milliseconds.
  */
 function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
-    console.log(chalk.yellow(`🚀 Starting TCPing on ${target}:${port} with ${protocolModule.name} protocol...`));
+    const isBasicProtocol = protocolModule.name.toLowerCase() === "basic";
+    if (isBasicProtocol) {
+        console.log(chalk.yellow(`🚀 Starting TCPing on ${target}:${port}...`));
+    } else {
+        console.log(chalk.yellow(`🚀 Starting TCPing on ${target}:${port} with ${protocolModule.name} protocol...`));
+    }
 
     const runAttempt = () => {
         totalAttempts++;
@@ -83,10 +88,14 @@ function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
                 if (socketLatency > maxSocketLatency) maxSocketLatency = socketLatency;
                 let extra = "";
                 if (result.extra !== undefined) {
-                    extra = ` (PC: ${result.extra}ms)`;
+                    extra = ` (Handshake: ${result.extra}ms)`;
                     totalHandshakeLatency += result.extra;
                 }
-                console.log(chalk.green(`[${totalAttempts}] Connected to ${target}:${port} in ${socketLatency}ms with ${protocolModule.name} protocol.${extra}`));
+                if (isBasicProtocol) {
+                    console.log(chalk.green(`[${totalAttempts}] Connected to ${target}:${port} in ${socketLatency}ms.${extra}`));
+                } else {
+                    console.log(chalk.green(`[${totalAttempts}] Connected to ${target}:${port} in ${socketLatency}ms with ${protocolModule.name} protocol.${extra}`));
+                }
             } else {
                 failedAttempts++;
                 console.log(chalk.red(`[${totalAttempts}] Error connecting to ${target}:${port} after ${totalDuration}ms: ${result.message}`));
