@@ -1,54 +1,73 @@
-import net from "net";
-
 export const name = "HTTP";
 export const description = "HTTP/HTTPS minimal GET request";
 
 /**
- * Performs an HTTP/HTTPS banner query.
+ * Performs an HTTP banner / status query.
  *
- * This function sends a minimal GET request over the provided socket
- * and accumulates any response data (typically the HTTP response headers).
- * If data is received within a timeout period, it calls the callback with
- * a success status and the raw response data.
+ * Sends a minimal HTTP request and immediately completes as soon as the HTTP
+ * status response line is received (e.g. HTTP/1.1 200 OK), without any debounce delay.
  *
- * The caller is responsible for providing either a plain TCP socket (for HTTP)
- * or a TLS socket (for HTTPS).
- *
- * @param {net.Socket} socket - The connected socket (TCP or TLS).
+ * @param {net.Socket} socket - The connected socket.
  * @param {string} target - The server hostname or IP address.
  * @param {number|string} port - The server port.
- * @param {Function} callback - Called with an object: { success: boolean, data?: string }.
+ * @param {object|Function} [options] - Options or callback.
+ * @param {Function} [callback] - Called with { success: boolean, meta?: string, message?: string }.
  */
-export function runHandshake(socket, target, port, callback) {
-    // Build a minimal HTTP GET request.
-    // The Host header is set to the provided target.
-    const request = `GET / HTTP/1.1\r\nHost: ${target}\r\nConnection: close\r\n\r\n`;
-    socket.write(request);
+export function runHandshake(socket, target, port, options, callback) {
+    const cb = typeof options === "function" ? options : callback;
+    const timeoutMs = (typeof options === "object" && options?.timeout) || 5000;
 
     let responseData = "";
-    let received = false;
-    let debounceTimer;
+    let completed = false;
+    let timeoutTimer = null;
 
-    // Handler for incoming data.
-    const onData = (data) => {
-        received = true;
-        responseData += data.toString("utf8");
-        // Clear and reset the debounce timer on every data event.
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            // No new data for 500ms: consider the response complete.
-            callback({ success: true, data: responseData });
-            socket.removeListener("data", onData);
-        }, 500);
+    const cleanup = () => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        socket.removeListener("data", onData);
+        socket.removeListener("error", onError);
+        socket.removeListener("close", onClose);
+    };
+
+    const done = (result) => {
+        if (completed) return;
+        completed = true;
+        cleanup();
+        if (typeof cb === "function") cb(result);
+    };
+
+    const onData = (chunk) => {
+        responseData += chunk.toString("utf8");
+        // As soon as the first line of the HTTP response is received:
+        if (responseData.includes("\n")) {
+            const firstLine = responseData.split(/\r?\n/)[0].trim();
+            done({ success: true, meta: firstLine });
+        }
+    };
+
+    const onError = (err) => {
+        done({ success: false, message: err.message });
+    };
+
+    const onClose = () => {
+        if (!completed) {
+            if (responseData.trim().length > 0) {
+                const firstLine = responseData.split(/\r?\n/)[0].trim();
+                done({ success: true, meta: firstLine });
+            } else {
+                done({ success: false, message: "Connection closed before HTTP response" });
+            }
+        }
     };
 
     socket.on("data", onData);
+    socket.once("error", onError);
+    socket.once("close", onClose);
 
-    // Overall timeout: if no data is received within 5000ms, consider it a failure.
-    setTimeout(() => {
-        if (!received) {
-            callback({ success: false });
-            socket.removeListener("data", onData);
-        }
-    }, 5000);
+    timeoutTimer = setTimeout(() => {
+        done({ success: false, message: `HTTP handshake timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
+
+    const request = `GET / HTTP/1.1\r\nHost: ${target}\r\nUser-Agent: TCPing/1.0\r\nConnection: close\r\n\r\n`;
+    socket.write(request);
 }
+

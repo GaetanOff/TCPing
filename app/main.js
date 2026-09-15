@@ -1,48 +1,74 @@
+#!/usr/bin/env node
+
 import net from "net";
+import dns from "dns";
+import { performance } from "perf_hooks";
 import chalk from "chalk";
 import { getProtocolModule } from "./protocol/protocols.js";
 import { validateIp, validatePort } from "./utils/validators.js";
 import { sendHelpMessage, sendStatisticsMessage } from "./utils/messages.js";
-import dns from "dns";
 
-let rawArgs = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
 
-let timeoutValue = 5000;
-
-// Extract timeout flag (-t or --timeout) and its value
-for (let i = 0; i < rawArgs.length; i++) {
-    if (rawArgs[i] === "-t" || rawArgs[i] === "--timeout") {
-        // If there is no next argument or next argument starts with "-", print error and exit.
-        if (i + 1 >= rawArgs.length || rawArgs[i + 1].startsWith("-")) {
-            console.log(chalk.red(`Error: Missing value for ${rawArgs[i]} flag.`));
-            process.exit(1);
-        }
-        timeoutValue = parseInt(rawArgs[i + 1], 10);
-        // Remove the flag and its value from rawArgs
-        rawArgs.splice(i, 2);
-        i--; // adjust index after splice
-    }
+// Check for help flag early
+if (rawArgs.includes("-h") || rawArgs.includes("--help")) {
+    sendHelpMessage();
+    process.exit(0);
 }
 
-// Separate flags (starting with "-" or "--") from non-flag parameters
-const flags = rawArgs.filter(arg => arg.startsWith("-"));
-const params = rawArgs.filter(arg => !arg.startsWith("-"));
+// Parse flags and positional parameters
+let timeoutValue = 5000;
+let maxCount = Infinity;
+let intervalValue = 1000;
+let resolveFlag = false;
+
+const params = [];
+for (let i = 0; i < rawArgs.length; i++) {
+    const arg = rawArgs[i];
+
+    if (arg === "-t" || arg === "--timeout") {
+        const val = rawArgs[++i];
+        if (!val || val.startsWith("-") || !/^\d+$/.test(val) || Number(val) <= 0) {
+            console.log(chalk.red(`Error: Missing or invalid value for ${arg} flag (must be a positive integer).`));
+            process.exit(1);
+        }
+        timeoutValue = Number(val);
+    } else if (arg === "-c" || arg === "--count") {
+        const val = rawArgs[++i];
+        if (!val || val.startsWith("-") || !/^\d+$/.test(val) || Number(val) <= 0) {
+            console.log(chalk.red(`Error: Missing or invalid value for ${arg} flag (must be a positive integer).`));
+            process.exit(1);
+        }
+        maxCount = Number(val);
+    } else if (arg === "-i" || arg === "--interval") {
+        const val = rawArgs[++i];
+        if (!val || val.startsWith("-") || !/^\d+$/.test(val) || Number(val) < 0) {
+            console.log(chalk.red(`Error: Missing or invalid value for ${arg} flag (must be a non-negative integer).`));
+            process.exit(1);
+        }
+        intervalValue = Number(val);
+    } else if (arg === "-r" || arg === "--resolve") {
+        resolveFlag = true;
+    } else if (arg.startsWith("-")) {
+        console.log(chalk.red(`Error: Unknown flag "${arg}". Use --help for usage.`));
+        process.exit(1);
+    } else {
+        params.push(arg);
+    }
+}
 
 if (params.length < 2) {
     sendHelpMessage();
     process.exit(1);
 }
 
-let [target, port, protocolInput] = params;
+const [target, portInput, protocolInput] = params;
 
-// Determine if the resolve flag is present. Accept any flag containing "r" or "resolve" (case-insensitive).
-const resolveFlag = flags.some(flag => flag.toLowerCase() === "-r" || flag.toLowerCase() === "--resolve");
-
-if (!validatePort(port)) {
-    console.log(chalk.red(`Error: Port "${port}" is invalid.`));
-    console.log(chalk.red(`Please enter a port number between 1 and 65535.`));
+if (!validatePort(portInput)) {
+    console.log(chalk.red(`Error: Port "${portInput}" is invalid. Please enter a port number between 1 and 65535.`));
     process.exit(1);
 }
+const port = parseInt(portInput, 10);
 
 if (!validateIp(target)) {
     console.log(chalk.red(`Error: IP address or domain "${target}" is invalid.`));
@@ -51,115 +77,178 @@ if (!validateIp(target)) {
 
 const protocolModule = getProtocolModule(protocolInput, chalk);
 
-// Statistics variables
+// Statistics tracking
 let totalAttempts = 0;
 let successfulAttempts = 0;
 let failedAttempts = 0;
-let totalSocketLatency = 0; // Sum of socket connection times
-let totalHandshakeLatency = 0; // Sum of handshake times (for non-basic protocols)
+let totalSocketLatency = 0;
+let totalHandshakeLatency = 0;
 let minSocketLatency = Infinity;
 let maxSocketLatency = 0;
 
-// Capture CTRL+C to print statistics before exiting
-process.on("SIGINT", () => {
-    sendStatisticsMessage(protocolModule, totalAttempts, successfulAttempts, failedAttempts, totalSocketLatency, totalHandshakeLatency, minSocketLatency, maxSocketLatency);
-});
+let currentSocket = null;
+let scheduleTimer = null;
+let isStopping = false;
+
+function printStatsAndExit() {
+    if (isStopping) return;
+    isStopping = true;
+    if (scheduleTimer) clearTimeout(scheduleTimer);
+    if (currentSocket) {
+        try {
+            currentSocket.removeAllListeners();
+            currentSocket.destroy();
+        } catch {}
+        currentSocket = null;
+    }
+    sendStatisticsMessage(
+        protocolModule,
+        totalAttempts,
+        successfulAttempts,
+        failedAttempts,
+        totalSocketLatency,
+        totalHandshakeLatency,
+        minSocketLatency,
+        maxSocketLatency
+    );
+}
+
+// Handle termination signals
+process.on("SIGINT", printStatsAndExit);
+process.on("SIGTERM", printStatsAndExit);
 
 /**
  * Continuously pings the target TCP port using the selected protocol.
- * Measures the socket connection time and, for non-basic protocols, the handshake time.
- * Schedules a new attempt after a fixed delay.
  *
- * @param {string} target - The target server IP address.
- * @param {string|number} port - The target server port.
- * @param {object} protocolModule - The protocol module to use for the handshake.
- * @param {number} delay - Delay between attempts in milliseconds.
+ * @param {string} displayTarget - The user-provided target string.
+ * @param {string} connectHost - The actual host/IP to connect to.
+ * @param {number} port - The target port number.
+ * @param {object} protocol - The protocol module.
  */
-function launchTcpingContinuous(target, port, protocolModule, delay = 1500) {
-    const isBasicProtocol = protocolModule.name.toLowerCase() === "basic";
-    if (isBasicProtocol) {
-        console.log(chalk.yellow(`🚀 Starting TCPing on ${target}:${port}...`));
+function launchTcping(displayTarget, connectHost, port, protocol) {
+    const isBasic = protocol.name.toLowerCase() === "basic";
+    const hostInfo = displayTarget !== connectHost ? `${displayTarget} [${connectHost}]:${port}` : `${displayTarget}:${port}`;
+
+    if (isBasic) {
+        console.log(chalk.yellow(`🚀 Starting TCPing on ${hostInfo}...`));
     } else {
-        console.log(chalk.yellow(`🚀 Starting TCPing on ${target}:${port} with ${protocolModule.name} protocol...`));
+        console.log(chalk.yellow(`🚀 Starting TCPing on ${hostInfo} with ${protocol.name} protocol...`));
     }
 
     const runAttempt = () => {
+        if (isStopping) return;
         totalAttempts++;
-        const startTime = Date.now(); // Start of the attempt
-        const socket = net.connect({ host: target, port: parseInt(port, 10) });
-        let finished = false;
-        let connectTime; // Time when 'connect' event occurs
 
-        // finish() is called once per attempt.
-        // It prints the socket connection time (from start to connect) and, for non-basic protocols,
-        // the handshake time (from connect to handshake completion).
+        const startTime = performance.now();
+        let finished = false;
+        let connectTime = null;
+
+        const socket = net.connect({ host: connectHost, port });
+        currentSocket = socket;
+
         const finish = (result) => {
-            if (finished) return;
+            if (finished || isStopping) return;
             finished = true;
-            const totalDuration = Date.now() - startTime; // Total time of attempt
-            const socketLatency = connectTime - startTime; // Time until socket connects
+
+            // Cleanup socket immediately to prevent resource leakage
+            try {
+                socket.removeAllListeners();
+                socket.destroy();
+            } catch {}
+            if (currentSocket === socket) currentSocket = null;
+
+            const totalDuration = performance.now() - startTime;
+
             if (result.success) {
                 successfulAttempts++;
+                const socketLatency = (connectTime !== null ? connectTime : performance.now()) - startTime;
                 totalSocketLatency += socketLatency;
-                // Update min/max socket latency
                 if (socketLatency < minSocketLatency) minSocketLatency = socketLatency;
                 if (socketLatency > maxSocketLatency) maxSocketLatency = socketLatency;
+
                 let extra = "";
-                if (result.extra !== undefined) {
-                    extra = ` (Handshake: ${result.extra}ms)`;
-                    totalHandshakeLatency += result.extra;
+                if (result.handshakeLatency !== undefined) {
+                    totalHandshakeLatency += result.handshakeLatency;
+                    const metaStr = result.meta ? `, ${result.meta}` : "";
+                    extra = ` (Handshake: ${result.handshakeLatency.toFixed(1)}ms${metaStr})`;
+                } else if (result.meta) {
+                    extra = ` (${result.meta})`;
                 }
-                if (isBasicProtocol) {
-                    console.log(chalk.green(`[${totalAttempts}] Connected to ${target}:${port} in ${socketLatency}ms.${extra}`));
+
+                const latencyStr = `${socketLatency.toFixed(1)}ms`;
+                if (isBasic) {
+                    console.log(chalk.green(`[${totalAttempts}] Connected to ${hostInfo} in ${latencyStr}.${extra}`));
                 } else {
-                    console.log(chalk.green(`[${totalAttempts}] Connected to ${target}:${port} in ${socketLatency}ms with ${protocolModule.name} protocol.${extra}`));
+                    console.log(chalk.green(`[${totalAttempts}] Connected to ${hostInfo} in ${latencyStr} with ${protocol.name} protocol.${extra}`));
                 }
             } else {
                 failedAttempts++;
-                console.log(chalk.red(`[${totalAttempts}] Error connecting to ${target}:${port} after ${totalDuration}ms: ${result.message}`));
+                const durationStr = `${totalDuration.toFixed(1)}ms`;
+                console.log(chalk.red(`[${totalAttempts}] Error connecting to ${hostInfo} after ${durationStr}: ${result.message}`));
             }
-            setTimeout(runAttempt, delay);
+
+            if (totalAttempts >= maxCount) {
+                printStatsAndExit();
+            } else {
+                scheduleTimer = setTimeout(runAttempt, intervalValue);
+            }
         };
 
-        socket.on('connect', () => {
-            connectTime = Date.now();
-            // For the basic protocol, the connection itself is sufficient.
-            if (protocolModule.name.toLowerCase() === "basic") {
+        socket.on("connect", () => {
+            connectTime = performance.now();
+
+            if (isBasic) {
                 finish({ success: true });
             } else {
-                // For other protocols, run the handshake and measure its duration.
-                protocolModule.runHandshake(socket, target, port, () => {
-                    const handshakeDuration = Date.now() - connectTime;
-                    finish({ success: true, extra: handshakeDuration });
+                protocol.runHandshake(socket, displayTarget, port, { timeout: timeoutValue }, (handshakeResult) => {
+                    if (handshakeResult?.success) {
+                        const handshakeDuration = performance.now() - connectTime;
+                        finish({
+                            success: true,
+                            handshakeLatency: handshakeDuration,
+                            meta: handshakeResult.meta
+                        });
+                    } else {
+                        finish({
+                            success: false,
+                            message: handshakeResult?.message || "Handshake failed"
+                        });
+                    }
                 });
             }
         });
 
-        socket.on('error', (err) => {
+        socket.on("error", (err) => {
             finish({ success: false, message: err.message });
         });
 
         socket.setTimeout(timeoutValue, () => {
             finish({ success: false, message: `timed out after ${timeoutValue}ms` });
-            socket.destroy();
         });
     };
 
     runAttempt();
 }
 
-// If the resolve flag is set and the target is not a numeric IP, resolve it before starting.
-function startPingWithResolvedTarget(targetInput) {
-    if (resolveFlag && net.isIP(targetInput) === 0) {
-        dns.lookup(targetInput, (err, address) => {
-            if (err) {
-                console.log(chalk.red(`Error resolving domain "${targetInput}": ${err.message}`));
-                process.exit(1);
-            }
-            console.log(chalk.gray(`Resolved domain "${targetInput}" to IP: ${address}`));
-        });
+/**
+ * Initializes TCPing, resolving DNS if requested.
+ */
+async function init() {
+    let connectHost = target;
+
+    if (resolveFlag && net.isIP(target) === 0) {
+        try {
+            const { address } = await dns.promises.lookup(target);
+            console.log(chalk.gray(`Resolved domain "${target}" to IP: ${address}`));
+            connectHost = address;
+        } catch (err) {
+            console.log(chalk.red(`Error resolving domain "${target}": ${err.message}`));
+            process.exit(1);
+        }
     }
-    launchTcpingContinuous(targetInput, port, protocolModule);
+
+    launchTcping(target, connectHost, port, protocolModule);
 }
 
-startPingWithResolvedTarget(target);
+init();
+

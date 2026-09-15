@@ -39,11 +39,17 @@ export function writeVarInt(value) {
  * @throws {Error} - Throws an error if more than 5 bytes are read (indicating a too-big VarInt).
  */
 export function readVarInt(buffer, offset = 0) {
+    if (!Buffer.isBuffer(buffer)) {
+        throw new TypeError("Expected a Buffer");
+    }
     let numRead = 0;
     let result = 0;
     let read;
     // Read one byte at a time until a byte is found with its MSB not set.
     do {
+        if (offset + numRead >= buffer.length) {
+            throw new RangeError("Unexpected end of buffer while reading VarInt");
+        }
         // Read the byte at the current position.
         read = buffer[offset + numRead];
         // Extract the lower 7 bits and shift them to the correct position.
