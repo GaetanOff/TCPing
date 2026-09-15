@@ -7,7 +7,11 @@
   "author": "GaetanDev.fr",
   "license": "GPL-3.0",
   "scripts": {
-    "start": "node app/main.js"
+    "start": "node app/main.js",
+    "test": "node --test"
+  },
+  "bin": {
+    "tcping": "./app/main.js"
   },
   "dependencies": {
     "chalk": "^5.4.1"

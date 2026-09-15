@@ -2,53 +2,76 @@ export const name = "FiveM";
 export const description = "FiveM handshake & info";
 
 /**
- * Performs a FiveM TCP ping by sending handshake data.
- *
- * This function sends a "getinfo" query over the TCP connection and accumulates
- * any response data. If any data is received within a timeout period, it calls the
- * callback with a success status and the raw response data.
+ * Performs a FiveM TCP ping by sending a getinfo query.
+ * Completes immediately when response data is received.
  *
  * @param {net.Socket} socket - The connected TCP socket.
  * @param {string} target - The server IP address.
  * @param {number|string} port - The server port.
- * @param {Function} callback - Called with an object: { success: boolean, data?: string }.
+ * @param {object|Function} [options] - Options or callback.
+ * @param {Function} [callback] - Called with { success: boolean, meta?: string, message?: string }.
  */
-export function runHandshake(socket, target, port, callback) {
-    // Construct the query packet: "getinfo" followed by a null terminator.
-    const queryString = "getinfo";
-    const queryBuffer = Buffer.concat([
-        Buffer.from(queryString, "utf8"),
-        Buffer.from([0x00])
-    ]);
+export function runHandshake(socket, target, port, options, callback) {
+    const cb = typeof options === "function" ? options : callback;
+    const timeoutMs = (typeof options === "object" && options?.timeout) || 5000;
 
-    // Send the query over the TCP socket.
-    socket.write(queryBuffer);
-
-    // Accumulate response data.
     let responseData = "";
-    let received = false;
-    let debounceTimer;
+    let completed = false;
+    let timeoutTimer = null;
 
-    // Handler for incoming data.
-    const onData = (data) => {
-        received = true;
-        responseData += data.toString("utf8");
-        // Reset the debounce timer on each data event.
-        clearTimeout(debounceTimer);
-        debounceTimer = setTimeout(() => {
-            // No new data for 500ms; consider the handshake complete.
-            callback({ success: true, data: responseData });
-            socket.removeListener("data", onData);
-        }, 500);
+    const cleanup = () => {
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        socket.removeListener("data", onData);
+        socket.removeListener("error", onError);
+        socket.removeListener("close", onClose);
+    };
+
+    const done = (result) => {
+        if (completed) return;
+        completed = true;
+        cleanup();
+        if (typeof cb === "function") cb(result);
+    };
+
+    const onData = (chunk) => {
+        responseData += chunk.toString("utf8");
+        // Complete immediately once data arrives
+        let meta = "Received info";
+        try {
+            if (responseData.includes("infoResponse")) {
+                meta = "infoResponse received";
+            }
+        } catch {}
+        done({ success: true, meta });
+    };
+
+    const onError = (err) => {
+        done({ success: false, message: err.message });
+    };
+
+    const onClose = () => {
+        if (!completed) {
+            if (responseData.length > 0) {
+                done({ success: true, meta: "Received data" });
+            } else {
+                done({ success: false, message: "Connection closed before FiveM response" });
+            }
+        }
     };
 
     socket.on("data", onData);
+    socket.once("error", onError);
+    socket.once("close", onClose);
 
-    // Overall timeout: if no data is received within 5000ms, return failure.
-    setTimeout(() => {
-        if (!received) {
-            callback({ success: false });
-            socket.removeListener("data", onData);
-        }
-    }, 5000);
+    timeoutTimer = setTimeout(() => {
+        done({ success: false, message: `FiveM handshake timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
+
+    // Send getinfo query with null terminator
+    const queryBuffer = Buffer.concat([
+        Buffer.from("getinfo", "utf8"),
+        Buffer.from([0x00])
+    ]);
+    socket.write(queryBuffer);
 }
+

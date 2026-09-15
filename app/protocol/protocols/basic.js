@@ -5,15 +5,18 @@ export const description = "Basic TCP connection";
  * Performs a trivial handshake for a basic connection.
  *
  * In a basic TCP connection, the handshake is implicitly completed
- * when the TCP connection is established. There is no additional data exchange.
- * Therefore, this function simply calls the callback immediately.
+ * when the TCP connection is established.
  *
  * @param {net.Socket} socket - The established TCP socket.
  * @param {string} target - The server IP address.
  * @param {number|string} port - The server port.
- * @param {Function} callback - A function to call once the handshake is considered complete.
+ * @param {object|Function} [options] - Options or callback function.
+ * @param {Function} [callback] - Function to call once handshake completes.
  */
-export function runHandshake(socket, target, port, callback) {
-    // For a synack connection, we simply close the connection as soon as it is established.
-    callback();
+export function runHandshake(socket, target, port, options, callback) {
+    const cb = typeof options === "function" ? options : callback;
+    if (typeof cb === "function") {
+        cb({ success: true });
+    }
 }
+
